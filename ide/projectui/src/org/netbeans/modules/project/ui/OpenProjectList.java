@@ -45,9 +45,11 @@ import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
@@ -121,6 +123,16 @@ public final class OpenProjectList {
      * otherwise we get a deadlock fairly fast 
      */
     static final Mutex MUTEX = new Mutex();
+    
+    /**
+     * Executor service for handling project opening operations with timeout
+     */
+    private static final ExecutorService PROJECT_OPENING_EXECUTOR = Executors.newCachedThreadPool();
+    
+    /**
+     * Timeout for project opening operations in seconds
+     */
+    private static final long PROJECT_OPENING_TIMEOUT = 30; // 30 seconds timeout
     
     public static Comparator<Project> projectByDisplayName() {
         return new ProjectByDisplayNameComparator();
@@ -703,11 +715,16 @@ public final class OpenProjectList {
         for (Project p : projects) {
             Parameters.notNull("projects", p);
             try {
-                Project p2 = ProjectManager.getDefault().findProject(p.getProjectDirectory());
+                // Add timeout for project finding to prevent "no response" issues
+                Project p2 = findProjectWithTimeout(p.getProjectDirectory(), PROJECT_OPENING_TIMEOUT, TimeUnit.SECONDS);
                 if (p2 != null) {
                     toHandle.add(p2);
                 } else {
-                    LOGGER.log(Level.WARNING, "Project in {0} disappeared", p.getProjectDirectory());
+                    LOGGER.log(Level.WARNING, "Project in {0} disappeared or could not be loaded within timeout", p.getProjectDirectory());
+                    // Notify user about the timeout
+                    if (handle != null) {
+                        handle.progress("Timeout loading project: " + p.getProjectDirectory().getName());
+                    }
                 }
                 if (prime) {
                     ActionProvider ap = p2.getLookup().lookup(ActionProvider.class);
@@ -735,11 +752,23 @@ public final class OpenProjectList {
                         );
                         ap.invokeAction(ActionProvider.COMMAND_PRIME, waitAndProject);
                         if (await[0] != null) {
-                            await[0].await();
+                            try {
+                                // Add timeout for priming to prevent hanging
+                                if (!await[0].await(PROJECT_OPENING_TIMEOUT, TimeUnit.SECONDS)) {
+                                    LOGGER.log(Level.WARNING, "Project priming timed out after " + PROJECT_OPENING_TIMEOUT + 
+                                              " seconds for project: " + p.getProjectDirectory());
+                                    if (handle != null) {
+                                        handle.progress("Priming timeout for: " + p.getProjectDirectory().getName());
+                                    }
+                                }
+                            } catch (InterruptedException e) {
+                                LOGGER.log(Level.INFO, "Project priming interrupted for project: " + p.getProjectDirectory(), e);
+                                Thread.currentThread().interrupt(); // Restore interrupt status
+                            }
                         }
                     }
                 }
-            } catch (InterruptedException | IOException | IllegalArgumentException ex) {
+            } catch (InterruptedException | IOException | IllegalArgumentException | TimeoutException ex) {
                 LOGGER.log(Level.INFO, "Cannot convert " + p.getProjectDirectory(), ex);
             }
         }
@@ -2119,6 +2148,39 @@ public final class OpenProjectList {
         }
         for (Project p : projects) {
             LOGGER.log(Level.FINER, "{0} {1}", new Object[]{ message, p == null ? null : p.toString()});
+        }
+    }
+    
+    /**
+     * Find a project with timeout to prevent "no response" issues.
+     * This method wraps ProjectManager.findProject() with a timeout to avoid hanging.
+     * 
+     * @param projectDirectory the project directory to find
+     * @param timeout the timeout value
+     * @param unit the timeout unit
+     * @return the found project or null if timeout or error occurred
+     */
+    private static Project findProjectWithTimeout(org.openide.filesystems.FileObject projectDirectory, long timeout, TimeUnit unit) {
+        try {
+            Future<Project> future = PROJECT_OPENING_EXECUTOR.submit(() -> {
+                return ProjectManager.getDefault().findProject(projectDirectory);
+            });
+            
+            return future.get(timeout, unit);
+        } catch (TimeoutException e) {
+            LOGGER.log(Level.WARNING, "Project loading timed out after " + timeout + " " + unit + 
+                      " for project: " + projectDirectory, e);
+            return null;
+        } catch (InterruptedException e) {
+            LOGGER.log(Level.INFO, "Project loading interrupted for project: " + projectDirectory, e);
+            Thread.currentThread().interrupt(); // Restore interrupt status
+            return null;
+        } catch (ExecutionException e) {
+            LOGGER.log(Level.WARNING, "Error loading project: " + projectDirectory, e);
+            return null;
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Unexpected error loading project: " + projectDirectory, e);
+            return null;
         }
     }
     

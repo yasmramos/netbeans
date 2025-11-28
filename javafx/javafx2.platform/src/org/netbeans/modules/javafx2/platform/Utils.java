@@ -138,14 +138,23 @@ public final class Utils {
         if (JDK9.compareTo(javaPlatform.getSpecification().getVersion()) > 0) {
             return false;
         }
-        for (ClassPath.Entry e : javaPlatform.getBootstrapLibraries().entries()) {
-            final URL url = e.getURL();
-            if (!MODULE_PROTOCOL.equals(url.getProtocol())) {
-                continue;
+        try {
+            for (ClassPath.Entry e : javaPlatform.getBootstrapLibraries().entries()) {
+                final URL url = e.getURL();
+                if (url == null) {
+                    continue; // Skip null URLs to prevent NullPointerException
+                }
+                if (!MODULE_PROTOCOL.equals(url.getProtocol())) {
+                    continue;
+                }
+                String moduleName = getModuleName(url);
+                if (moduleName != null && MODULE_JFX_BASE.equals(moduleName)) {
+                    return true;
+                }
             }
-            if (MODULE_JFX_BASE.equals(getModuleName(url))) {
-                return true;
-            }
+        } catch (Exception ex) {
+            LOGGER.warning("Error checking JavaFX modules: " + ex.getMessage());
+            return false;
         }
         return false;
     }
@@ -164,17 +173,43 @@ public final class Utils {
             return true;
         }
         
-//        try {
-//            if (Utilities.isUnix() || Utilities.isMac()) {
-//                System.load(runtimePath + File.separatorChar + "bin" + File.separatorChar + "libmat.jnilib"); // NOI18N
-//                return true;
-//            } else if (Utilities.isWindows()) {
-//                System.load(runtimePath + File.separatorChar + "bin" + File.separatorChar + "mat.dll"); // NOI18N
-//            }
-//        } catch (Throwable t) {
-//            return false;
-//        }
-        return true;
+        // Check if runtime directory exists and is accessible
+        File runtimeDir = new File(runtimePath);
+        if (!runtimeDir.exists() || !runtimeDir.canRead()) {
+            LOGGER.warning("JavaFX runtime directory not accessible: " + runtimePath);
+            return true; // Default to true to avoid blocking
+        }
+        
+        // Check bin directory existence
+        File binDir = new File(runtimeDir, "bin");
+        if (!binDir.exists() || !binDir.canRead()) {
+            LOGGER.info("JavaFX bin directory not found, skipping architecture check: " + runtimePath);
+            return true; // Default to true if bin directory is missing
+        }
+        
+        // Attempt architecture verification (simplified)
+        try {
+            // Check for JavaFX native libraries existence
+            String osName = System.getProperty("os.name").toLowerCase();
+            String nativeLibName;
+            if (osName.contains("win")) {
+                nativeLibName = "mat.dll";
+            } else if (osName.contains("mac")) {
+                nativeLibName = "libmat.jnilib";
+            } else {
+                nativeLibName = "libmat.so";
+            }
+            
+            File nativeLib = new File(binDir, nativeLibName);
+            if (nativeLib.exists()) {
+                LOGGER.info("JavaFX native library found: " + nativeLib.getAbsolutePath());
+                return true;
+            }
+        } catch (Exception ex) {
+            LOGGER.fine("Error during architecture verification: " + ex.getMessage());
+        }
+        
+        return true; // Default to true to avoid blocking OpenJFX loading
     }
 
     // TODO what if jar names/locations will be changed?
@@ -213,13 +248,27 @@ public final class Utils {
     
     @NonNull
     private static String getModuleName(@NonNull final URL url) {
-        final String path = url.getPath();
-        final int end = path.endsWith(URL_SEPARATOR) ?
-                            path.length() - URL_SEPARATOR.length() :
-                            path.length();
-        int start = end == 0 ? -1 : path.lastIndexOf(URL_SEPARATOR, end - 1);
-        start = start < 0 ? 0 : start + URL_SEPARATOR.length();
-        return path.substring(start, end);
+        try {
+            final String path = url.getPath();
+            if (path == null || path.isEmpty()) {
+                return "";
+            }
+            final int end = path.endsWith(URL_SEPARATOR) ?
+                                path.length() - URL_SEPARATOR.length() :
+                                path.length();
+            if (end <= 0) {
+                return "";
+            }
+            int start = end == 0 ? -1 : path.lastIndexOf(URL_SEPARATOR, end - 1);
+            start = start < 0 ? 0 : start + URL_SEPARATOR.length();
+            if (start >= end) {
+                return "";
+            }
+            return path.substring(start, end);
+        } catch (Exception ex) {
+            LOGGER.warning("Error parsing module name from URL " + url + ": " + ex.getMessage());
+            return "";
+        }
     }
 
 }

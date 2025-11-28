@@ -108,41 +108,54 @@ public class JavaFxRuntimeInclusion {
     @NonNull
     public static JavaFxRuntimeInclusion forPlatform(@NonNull final JavaPlatform javaPlatform) {
         Parameters.notNull("javaPlatform", javaPlatform);   //NOI18N
-        boolean isDefault = JavaPlatform.getDefault().equals(javaPlatform);
-        List<String> paths = new ArrayList<>();
-        Support runtimeSupport = Support.MISSING;
-        String runtimePath = null;
-        if (Utils.hasJavaFxModule(javaPlatform)) {
-            runtimeSupport = Support.INCLUDED;
-        } else {
-            for(String runtimeLocation : Utils.getJavaFxRuntimeLocations()) {
-                runtimePath = runtimeLocation + Utils.getJavaFxRuntimeArchiveName();
-                runtimeSupport = forRuntime(javaPlatform, Utils.getJavaFxRuntimeSubDir(javaPlatform) + runtimePath);
-                if(runtimeSupport != Support.MISSING) {
-                    break;
+        
+        try {
+            boolean isDefault = JavaPlatform.getDefault().equals(javaPlatform);
+            List<String> paths = new ArrayList<>();
+            Support runtimeSupport = Support.MISSING;
+            String runtimePath = null;
+            
+            // Check for JavaFX module first (more reliable for modern JDKs)
+            if (Utils.hasJavaFxModule(javaPlatform)) {
+                runtimeSupport = Support.INCLUDED;
+            } else {
+                // Fallback to legacy JAR-based detection
+                for(String runtimeLocation : Utils.getJavaFxRuntimeLocations()) {
+                    runtimePath = runtimeLocation + Utils.getJavaFxRuntimeArchiveName();
+                    runtimeSupport = forRuntime(javaPlatform, Utils.getJavaFxRuntimeSubDir(javaPlatform) + runtimePath);
+                    if(runtimeSupport != Support.MISSING) {
+                        break;
+                    }
                 }
-            }
-            if(runtimeSupport != Support.MISSING && runtimePath != null) {
-                if(runtimeSupport == Support.PRESENT) {
-                    paths.add((isDefault ? "" : Utils.getJavaFxRuntimeSubDir(javaPlatform)) + runtimePath);
-                }
-                for(String optionalName : Utils.getJavaFxRuntimeOptionalNames()) {
-                    Support optionalSupport = Support.MISSING;
-                    String optionalPath = null;
-                    for(String optionalLocation : Utils.getJavaFxRuntimeLocations()) {
-                        optionalPath = optionalLocation + optionalName;
-                        optionalSupport = forRuntime(javaPlatform, Utils.getJavaFxRuntimeSubDir(javaPlatform) + optionalPath);
-                        if(optionalSupport == Support.PRESENT) {
-                            break;
+                
+                if(runtimeSupport != Support.MISSING && runtimePath != null) {
+                    if(runtimeSupport == Support.PRESENT) {
+                        paths.add((isDefault ? "" : Utils.getJavaFxRuntimeSubDir(javaPlatform)) + runtimePath);
+                    }
+                    
+                    // Check for optional JARs
+                    for(String optionalName : Utils.getJavaFxRuntimeOptionalNames()) {
+                        Support optionalSupport = Support.MISSING;
+                        String optionalPath = null;
+                        for(String optionalLocation : Utils.getJavaFxRuntimeLocations()) {
+                            optionalPath = optionalLocation + optionalName;
+                            optionalSupport = forRuntime(javaPlatform, Utils.getJavaFxRuntimeSubDir(javaPlatform) + optionalPath);
+                            if(optionalSupport == Support.PRESENT) {
+                                break;
+                            }
+                        }
+                        if(optionalSupport == Support.PRESENT && optionalPath != null) {
+                            paths.add((isDefault ? "" : Utils.getJavaFxRuntimeSubDir(javaPlatform)) + optionalPath);
                         }
                     }
-                    if(optionalSupport == Support.PRESENT && optionalPath != null) {
-                        paths.add((isDefault ? "" : Utils.getJavaFxRuntimeSubDir(javaPlatform)) + optionalPath);
-                    }
                 }
             }
+            
+            return new JavaFxRuntimeInclusion(runtimeSupport, paths);
+        } catch (Exception ex) {
+            System.err.println("Error detecting JavaFX runtime for platform: " + ex.getMessage());
+            return new JavaFxRuntimeInclusion(Support.MISSING, new ArrayList<>());
         }
-        return new JavaFxRuntimeInclusion(runtimeSupport, paths);
     }
 
     /**
@@ -155,18 +168,39 @@ public class JavaFxRuntimeInclusion {
     private static Support forRuntime(@NonNull final JavaPlatform javaPlatform, @NonNull final String runtimePath) {
         Parameters.notNull("javaPlatform", javaPlatform);   //NOI18N
         Parameters.notNull("rtPath", runtimePath);   //NOI18N
-        for (FileObject installFolder : javaPlatform.getInstallFolders()) {
-            final FileObject jfxrtJar = installFolder.getFileObject(runtimePath);
-            if (jfxrtJar != null  && jfxrtJar.isData()) {
-                final URL jfxrtRoot = FileUtil.getArchiveRoot(jfxrtJar.toURL());
-                for (ClassPath.Entry e : javaPlatform.getBootstrapLibraries().entries()) {
-                    if (jfxrtRoot.equals(e.getURL())) {
-                        return Support.INCLUDED;
+        
+        if (runtimePath.trim().isEmpty()) {
+            return Support.MISSING;
+        }
+        
+        try {
+            for (FileObject installFolder : javaPlatform.getInstallFolders()) {
+                if (installFolder == null || !installFolder.isValid()) {
+                    continue;
+                }
+                
+                final FileObject jfxrtJar = installFolder.getFileObject(runtimePath);
+                if (jfxrtJar != null  && jfxrtJar.isData()) {
+                    try {
+                        final URL jfxrtRoot = FileUtil.getArchiveRoot(jfxrtJar.toURL());
+                        if (jfxrtRoot != null) {
+                            for (ClassPath.Entry e : javaPlatform.getBootstrapLibraries().entries()) {
+                                if (e != null && jfxrtRoot.equals(e.getURL())) {
+                                    return Support.INCLUDED;
+                                }
+                            }
+                        }
+                        return Support.PRESENT;
+                    } catch (Exception ex) {
+                        // Log error but continue checking
+                        System.err.println("Error checking JavaFX runtime: " + ex.getMessage());
                     }
                 }
-                return Support.PRESENT;
             }
+        } catch (Exception ex) {
+            System.err.println("Error accessing platform folders: " + ex.getMessage());
         }
+        
         return Support.MISSING;
     }
     
