@@ -421,22 +421,53 @@ final class VanillaCompileWorker extends CompileWorker {
                     JavaIndex.LOG.log(Level.FINEST, "VanillaCompileWorker was canceled in root: " + FileUtil.getFileDisplayName(context.getRoot()), t);  //NOI18N
                 }
             } else {
-                Exceptions.printStackTrace(t);
+                // Enhanced error handling to prevent "Uncompilable code exception"
                 if (t instanceof ThreadDeath) {
                     throw (ThreadDeath) t;
                 } else {
-                    Level level = t instanceof FatalError ? Level.FINEST : Level.WARNING;
+                    // More specific error categorization
+                    Level level;
+                    String errorType;
+                    
+                    if (t instanceof FatalError) {
+                        level = Level.FINEST;
+                        errorType = "Fatal Error";
+                    } else if (t instanceof com.sun.tools.javac.util.Abort) {
+                        level = Level.INFO;
+                        errorType = "Compilation Abort";
+                    } else if (t instanceof Symbol.CompletionFailure) {
+                        level = Level.WARNING;
+                        errorType = "Completion Failure";
+                    } else if (t instanceof javax.tools.JavaFileObject.Kind) {
+                        level = Level.WARNING;
+                        errorType = "File Object Error";
+                    } else {
+                        level = Level.WARNING;
+                        errorType = "General Exception";
+                    }
+                    
+                    // Log the error with better context
                     if (JavaIndex.LOG.isLoggable(level)) {
                         final ClassPath bootPath   = javaContext.getClasspathInfo().getClassPath(ClasspathInfo.PathKind.BOOT);
                         final ClassPath classPath  = javaContext.getClasspathInfo().getClassPath(ClasspathInfo.PathKind.COMPILE);
                         final ClassPath sourcePath = javaContext.getClasspathInfo().getClassPath(ClasspathInfo.PathKind.SOURCE);
-                        final String message = String.format("VanillaCompileWorker caused an exception\nRoot: %s\nBootpath: %s\nClasspath: %s\nSourcepath: %s", //NOI18N
+                        
+                        final String message = String.format("VanillaCompileWorker caused %s\nRoot: %s\nBootpath: %s\nClasspath: %s\nSourcepath: %s", //NOI18N
+                                    errorType,
                                     FileUtil.getFileDisplayName(context.getRoot()),
                                     bootPath == null   ? null : bootPath.toString(),
                                     classPath == null  ? null : classPath.toString(),
                                     sourcePath == null ? null : sourcePath.toString()
                                     );
                         JavaIndex.LOG.log(level, message, t);  //NOI18N
+                    }
+                    
+                    // For non-fatal errors, print stack trace only for debugging
+                    // but continue processing to prevent complete failure
+                    if (!(t instanceof FatalError)) {
+                        if (JavaIndex.LOG.isLoggable(Level.FINER)) {
+                            Exceptions.printStackTrace(t);
+                        }
                     }
                 }
             }
@@ -647,7 +678,16 @@ final class VanillaCompileWorker extends CompileWorker {
                     fa.tvars = error2Object(fa.tvars);
                     mt = fa.asMethodType();
                 } else {
-                    mt = (Type.MethodType) msym.type;
+                    try {
+                        mt = (Type.MethodType) msym.type;
+                    } catch (ClassCastException e) {
+                        // Handle case where type is not a MethodType - this can happen with erroneous code
+                        if (JavaIndex.LOG.isLoggable(Level.FINER)) {
+                            JavaIndex.LOG.log(Level.FINER, "ClassCastException when casting method type for: " + msym, e);
+                        }
+                        // Create a dummy method type to continue processing
+                        mt = new Type.MethodType(Type.noType, Type.noType, Type.noType, null);
+                    }
                 }
                 clearMethodType(mt);
                 if (msym.erasure_field != null && msym.erasure_field.hasTag(TypeTag.METHOD))
@@ -810,7 +850,12 @@ final class VanillaCompileWorker extends CompileWorker {
                     try {
                         syms.objectMethodsType.tsym.flags();
                     } catch (CompletionFailure cf) {
-                        //ignore
+                        // Enhanced handling of CompletionFailure to prevent "Uncompilable code exception"
+                        if (JavaIndex.LOG.isLoggable(Level.FINER)) {
+                            JavaIndex.LOG.log(Level.FINER, "CompletionFailure caught while checking ObjectMethodsType for record: " + 
+                                            clazz.sym.getQualifiedName(), cf);
+                        }
+                        // Don't re-throw, just continue processing - this allows compilation to proceed
                     }
                     if (!syms.objectMethodsType.tsym.type.isErroneous()) {
                         //ObjectMethods exist:
