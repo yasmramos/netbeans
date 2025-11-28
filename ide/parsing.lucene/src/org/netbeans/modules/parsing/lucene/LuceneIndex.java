@@ -396,34 +396,64 @@ public class LuceneIndex implements Index.Transactional, Index.WithTermFrequenci
                 return;
             }
             final LowMemoryWatcher lmListener = LowMemoryWatcher.getInstance();
+            final boolean useRamDirectory = !lmListener.isLowMemory();
             Directory memDir = null;
             IndexWriter activeOut;
-            if (lmListener.isLowMemory()) {
-                activeOut = out;
-            } else {
-                memDir = new RAMDirectory ();
-                activeOut = new IndexWriter (
+            
+            // Optimize: Create writer once instead of repeatedly
+            if (useRamDirectory) {
+                memDir = new RAMDirectory();
+                activeOut = new IndexWriter(
                     memDir,
                     new IndexWriterConfig(
                         Version.LUCENE_35,
                         dirCache.getAnalyzer()));
+            } else {
+                activeOut = out;
             }
+            
+            // Batch processing for better performance
+            final int BATCH_SIZE = 100;  // Process 100 documents at a time
+            final List<T> batch = new ArrayList<>(BATCH_SIZE);
+            int processedCount = 0;
+            
             for (Iterator<T> it = fastRemoveIterable(data).iterator(); it.hasNext();) {
                 T entry = it.next();
                 it.remove();
                 final Document doc = docConvertor.convert(entry);
+                
+                batch.add(entry);
                 activeOut.addDocument(doc);
-                if (memDir != null && lmListener.isLowMemory()) {
-                    activeOut.close();
-                    out.addIndexes(memDir);
-                    memDir = new RAMDirectory ();
-                    activeOut = new IndexWriter (
-                        memDir,
-                        new IndexWriterConfig(
-                            Version.LUCENE_35,
-                            dirCache.getAnalyzer()));
+                processedCount++;
+                
+                // Process in batches to reduce memory pressure and improve performance
+                if (batch.size() >= BATCH_SIZE || !it.hasNext()) {
+                    try {
+                        // Flush batch if using RAM directory and memory is getting low
+                        if (memDir != null && lmListener.isLowMemory() && batch.size() > 0) {
+                            activeOut.close();
+                            out.addIndexes(memDir);
+                            
+                            // Recreate RAM directory with current batch
+                            memDir = new RAMDirectory();
+                            activeOut = new IndexWriter(
+                                memDir,
+                                new IndexWriterConfig(
+                                    Version.LUCENE_35,
+                                    dirCache.getAnalyzer()));
+                            
+                            // Re-add current batch
+                            for (T batchEntry : batch) {
+                                activeOut.addDocument(docConvertor.convert(batchEntry));
+                            }
+                        }
+                    } catch (IOException e) {
+                        LOGGER.log(Level.WARNING, "Error processing batch of " + batch.size() + " documents", e);
+                    }
+                    batch.clear();
                 }
             }
+            
             data.clear();
             if (memDir != null) {
                 activeOut.close();

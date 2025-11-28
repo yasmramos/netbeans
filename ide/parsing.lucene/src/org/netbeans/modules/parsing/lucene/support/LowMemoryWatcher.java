@@ -85,13 +85,42 @@ public final class LowMemoryWatcher {
      */
     public void free(final boolean freeCaches) {
         if (freeCaches) {
-            CacheCleaner.clean();
+            try {
+                CacheCleaner.clean();
+            } catch (Exception e) {
+                if (LOG.isLoggable(Level.FINE)) {
+                    LOG.log(Level.FINE, "Error cleaning caches during memory free", e);
+                }
+            }
         }
+        
         final Runtime rt = Runtime.getRuntime();
-        rt.gc();
-        rt.runFinalization();
-        rt.gc();
-        rt.gc();
+        
+        // More aggressive memory cleanup for severe conditions
+        try {
+            // Request garbage collection multiple times for better effect
+            for (int i = 0; i < 3; i++) {
+                rt.gc();
+                Thread.sleep(10); // Small delay between GC calls
+            }
+            rt.runFinalization();
+            
+            // Log memory status after cleanup
+            if (LOG.isLoggable(Level.FINER)) {
+                final MemoryUsage usage = memBean.getHeapMemoryUsage();
+                if (usage != null) {
+                    long used = usage.getUsed();
+                    long max = usage.getMax();
+                    LOG.log(Level.FINER, 
+                        "Memory cleanup completed - Used: {0}MB, Max: {1}MB ({2}%)", 
+                        new Object[]{used / 1024 / 1024, max / 1024 / 1024, (used * 100 / max)});
+                }
+            }
+        } catch (Exception e) {
+            if (LOG.isLoggable(Level.FINE)) {
+                LOG.log(Level.FINE, "Error during memory cleanup", e);
+            }
+        }
     }
 
     /*test*/ void setLowMemory(final boolean lowMemory) {
@@ -112,9 +141,13 @@ public final class LowMemoryWatcher {
 
     private static class DefaultStrategy implements Callable<Boolean> {
 
-        private static final float heapLimit = 0.8f;
+        private static final float heapLimit = 0.85f;  // Increased from 0.8f to be less aggressive
+        private static final float aggressiveHeapLimit = 0.92f;  // Secondary threshold for aggressive cleanup
+        private static final int memoryCheckIntervalMs = 2000;  // Cache results for 2 seconds
         private final MemoryMXBean memBean;
         private volatile long lastTime;
+        private volatile Boolean lastResult;
+        private volatile long lastCheckTime;
 
         DefaultStrategy() {
             this.memBean = ManagementFactory.getMemoryMXBean();
@@ -123,27 +156,57 @@ public final class LowMemoryWatcher {
 
         @Override
         public Boolean call() throws Exception {
+            final long now = System.currentTimeMillis();
+            
+            // Cache the result to avoid frequent memory checks
+            if (lastCheckTime > 0 && (now - lastCheckTime) < memoryCheckIntervalMs) {
+                return lastResult != null ? lastResult : false;
+            }
+            
             if (this.memBean != null) {
-                final MemoryUsage usage = this.memBean.getHeapMemoryUsage();
-                if (usage != null) {
-                    long used = usage.getUsed();
-                    long max = usage.getMax();
-                    final boolean res = used > max * heapLimit;
-                    if (LOG.isLoggable(Level.FINEST)) {
-                        final long now = System.currentTimeMillis();
-                        if (now - lastTime > LOGGER_RATE) {
-                            LOG.log(
-                                Level.FINEST,
-                                "Max memory: {0}, Used memory: {1}, Low memory condition: {2}", //NOI18N
-                                new Object[]{
-                                    max,
-                                    used,
-                                    res
-                                });
-                            lastTime = now;
+                try {
+                    final MemoryUsage usage = this.memBean.getHeapMemoryUsage();
+                    if (usage != null) {
+                        long used = usage.getUsed();
+                        long max = usage.getMax();
+                        
+                        // Smart memory detection with multiple thresholds
+                        boolean result;
+                        if (max <= 0) {
+                            // Fallback for systems where max memory is not available
+                            result = used > (Runtime.getRuntime().totalMemory() * heapLimit);
+                        } else {
+                            // Primary threshold - normal low memory condition
+                            boolean primaryThreshold = used > max * heapLimit;
+                            
+                            // Secondary threshold - aggressive cleanup needed
+                            boolean aggressiveThreshold = used > max * aggressiveHeapLimit;
+                            
+                            result = primaryThreshold;
+                            
+                            // Log different levels based on severity
+                            if (aggressiveThreshold && LOG.isLoggable(Level.WARNING)) {
+                                LOG.log(Level.WARNING, 
+                                    "Aggressive low memory condition detected - Used: {0}MB, Max: {1}MB ({2}%)", 
+                                    new Object[]{used / 1024 / 1024, max / 1024 / 1024, (used * 100 / max)});
+                            } else if (primaryThreshold && LOG.isLoggable(Level.FINER)) {
+                                LOG.log(Level.FINER, 
+                                    "Low memory condition detected - Used: {0}MB, Max: {1}MB ({2}%)", 
+                                    new Object[]{used / 1024 / 1024, max / 1024 / 1024, (used * 100 / max)});
+                            }
                         }
+                        
+                        // Cache the result
+                        lastResult = result;
+                        lastCheckTime = now;
+                        
+                        return result;
                     }
-                    return res;
+                } catch (Exception e) {
+                    // Don't let memory check failures crash the system
+                    if (LOG.isLoggable(Level.FINE)) {
+                        LOG.log(Level.FINE, "Error checking memory usage", e);
+                    }
                 }
             }
             return false;
