@@ -54,6 +54,7 @@ public class Util {
     public static final String PROTO_HTTPS = "https";            //NOI18N
     public static final String PROTO_FILE = "file";              //NOI18N
     private static final String JFXRT_PATH = "lib/jfxrt.jar";    //NOI18N
+    private static final String JAVAFX_MODULE_PREFIX = "javafx.";  //NOI18N
     private static final String MODULES_FOLDER = "modules";      //NOI18N
     private static final String MODULE_INFO = "module-info.class";  //NOI18N
     private static final SpecificationVersion OLD_JDK9 = new SpecificationVersion("1.9");   //NOI18N
@@ -439,15 +440,95 @@ public class Util {
                 version;
     }
 
+    /**
+     * Locates the legacy Oracle JavaFX runtime archive ({@code jfxrt.jar}) in the
+     * JDK installation folders. This applies only to JDK 8 and earlier, where
+     * JavaFX was shipped as an extra jar; starting with JDK 9 (and on any JDK
+     * without bundled JavaFX) this returns {@code null}.
+     *
+     * @param installFolders the JDK installation folders of a platform
+     * @return a path resource pointing at the {@code jfxrt.jar} archive root,
+     *         or {@code null} if no bundled JavaFX runtime was found
+     */
     @CheckForNull
-    private static PathResourceImplementation getJfxRt(@NonNull final Collection<? extends FileObject> installFolders) {
+    public static PathResourceImplementation getJfxRt(@NonNull final Collection<? extends FileObject> installFolders) {
         for (FileObject installFolder : installFolders) {
-            final FileObject jfxrt = installFolder.getFileObject(JFXRT_PATH);
+            // JDK 7 layout: <jdk>/lib/jfxrt.jar,
+            // JDK 8 layout: <jdk>/jre/lib/ext/jfxrt.jar
+            final FileObject jfxrt = findJfxRtFile(installFolder);
             if (jfxrt != null && FileUtil.isArchiveFile(jfxrt)) {
-                return ClassPathSupport.createResource(FileUtil.getArchiveRoot(jfxrt.toURL()));
+                try {
+                    return ClassPathSupport.createResource(FileUtil.getArchiveRoot(jfxrt.toURL()));
+                } catch (MalformedURLException e) {
+                    LOG.log(Level.WARNING, "Invalid jfxrt.jar URL in " + installFolder, e);  //NOI18N
+                }
             }
         }
         return null;
+    }
+
+    @CheckForNull
+    private static FileObject findJfxRtFile(@NonNull final FileObject installFolder) {
+        FileObject jfxrt = installFolder.getFileObject(JFXRT_PATH);
+        if (jfxrt == null) {
+            // JDK 8 bundles JavaFX in the JRE extension directory
+            jfxrt = installFolder.getFileObject("jre/lib/ext/jfxrt.jar");  //NOI18N
+        }
+        return jfxrt;
+    }
+
+    /**
+     * Detects whether the given platform install folders ship bundled JavaFX.
+     * <p>Two layouts are recognized:
+     * <ul>
+     *   <li>Modular JDKs (Zulu FX, Liberica Full, etc.): the presence of a
+     *       {@code javafx.*} module in the runtime image.</li>
+     *   <li>Legacy JDK 8 and earlier installations: the presence of
+     *       {@code jfxrt.jar}.</li>
+     * </ul>
+     * OpenJFX distributed as separate Maven artifacts ({@code org.openjfx}) is
+     * not part of the JDK itself and is therefore not reported here; it is
+     * handled through the project dependencies.
+     *
+     * @param installFolders the JDK installation folders of a platform
+     * @return true if the platform has JavaFX bundled in its runtime image
+     */
+    public static boolean hasBundledJavaFX(@NonNull final Collection<? extends FileObject> installFolders) {
+        for (FileObject installFolder : installFolders) {
+            final File installDir = FileUtil.toFile(installFolder);
+            if (installDir != null) {
+                final URI imageURI = NBJRTUtil.getImageURI(installDir);
+                if (imageURI != null) {
+                    // Modular runtime image (JDK 9+): look for javafx.* modules
+                    final FileObject imageRoot = URLMapper.findFileObject(toURL(imageURI));
+                    final FileObject root = imageRoot == null ? null : getModulesRoot(imageRoot);
+                    if (root != null) {
+                        for (FileObject module : root.getChildren()) {
+                            if (module.isFolder() && module.getName().startsWith(JAVAFX_MODULE_PREFIX)) {
+                                return true;
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+            // Legacy JDK 8 and earlier: jfxrt.jar
+            final FileObject jfxrt = findJfxRtFile(installFolder);
+            if (jfxrt != null && FileUtil.isArchiveFile(jfxrt)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @CheckForNull
+    private static URL toURL(@NonNull final URI uri) {
+        try {
+            return uri.toURL();
+        } catch (MalformedURLException e) {
+            LOG.log(Level.WARNING, "Invalid jimage URI " + uri, e);  //NOI18N
+            return null;
+        }
     }
 
     private static void addPath(
