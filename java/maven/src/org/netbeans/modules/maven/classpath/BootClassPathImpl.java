@@ -21,7 +21,6 @@ package org.netbeans.modules.maven.classpath;
 
 import java.beans.PropertyChangeEvent;
 import java.io.File;
-import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -37,6 +36,7 @@ import org.netbeans.modules.maven.api.NbMavenProject;
 import org.netbeans.spi.java.classpath.PathResourceImplementation;
 import org.netbeans.spi.java.classpath.support.ClassPathSupport;
 import org.openide.filesystems.FileObject;
+import org.openide.filesystems.FileStateInvalidException;
 import org.openide.filesystems.FileUtil;
 
 /**
@@ -189,12 +189,16 @@ public final class BootClassPathImpl extends AbstractBootPathImpl {
 
     @NonNull
     private static java.net.URL toUrl(@NonNull final FileObject folder) {
+        // Prefer the repository URL, which is stable for indexed folders;
+        // fall back to the primary URL when there is no repository.
         try {
-            return folder.getURL();
-        } catch (MalformedURLException e) {
-            LOG.log(Level.FINE, "Invalid URL for " + folder, e);
-            throw new IllegalStateException(e);
+            if (folder.getFileSystem().getRepository() != null) {
+                return folder.getURLImpl();
+            }
+        } catch (FileStateInvalidException e) {
+            LOG.log(Level.FINE, "Invalid state for " + folder, e);
         }
+        return folder.toURL();
     }
 
     private static final Logger LOG = Logger.getLogger(BootClassPathImpl.class.getName());
