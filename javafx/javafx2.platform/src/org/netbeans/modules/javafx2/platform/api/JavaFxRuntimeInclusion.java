@@ -30,6 +30,7 @@ import org.netbeans.api.java.classpath.ClassPath;
 import org.netbeans.api.java.platform.JavaPlatform;
 import org.netbeans.api.java.platform.JavaPlatformManager;
 import org.netbeans.modules.javafx2.platform.Utils;
+import org.netbeans.modules.java.j2seplatform.platformdefinition.Util;
 import org.openide.filesystems.FileObject;
 import org.openide.filesystems.FileUtil;
 import org.openide.util.Parameters;
@@ -112,7 +113,7 @@ public class JavaFxRuntimeInclusion {
         List<String> paths = new ArrayList<>();
         Support runtimeSupport = Support.MISSING;
         String runtimePath = null;
-        if (Utils.hasJavaFxModule(javaPlatform)) {
+        if (Utils.hasJavaFxModule(javaPlatform) || hasBundledJavaFX(javaPlatform)) {
             runtimeSupport = Support.INCLUDED;
         } else {
             for(String runtimeLocation : Utils.getJavaFxRuntimeLocations()) {
@@ -168,6 +169,21 @@ public class JavaFxRuntimeInclusion {
             }
         }
         return Support.MISSING;
+    }
+
+    /**
+     * Checks whether the platform ships JavaFX bundled in its runtime image,
+     * either as {@code javafx.*} modules (JDK 9+ builds such as Zulu FX or
+     * Liberica Full) or as the legacy {@code jfxrt.jar} (JDK 8 and earlier).
+     * This complements {@link Utils#hasJavaFxModule} which only inspects the
+     * declared bootstrap libraries of the platform.
+     *
+     * @param javaPlatform the {@link JavaPlatform} to check
+     * @return true if the platform has JavaFX bundled
+     */
+    private static boolean hasBundledJavaFX(@NonNull final JavaPlatform javaPlatform) {
+        final Collection<FileObject> installFolders = javaPlatform.getInstallFolders();
+        return !installFolders.isEmpty() && Util.hasBundledJavaFX(installFolders);
     }
     
     /**
