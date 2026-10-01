@@ -457,11 +457,8 @@ public class Util {
             // JDK 8 layout: <jdk>/jre/lib/ext/jfxrt.jar
             final FileObject jfxrt = findJfxRtFile(installFolder);
             if (jfxrt != null && FileUtil.isArchiveFile(jfxrt)) {
-                try {
-                    return ClassPathSupport.createResource(FileUtil.getArchiveRoot(jfxrt.toURL()));
-                } catch (MalformedURLException e) {
-                    LOG.log(Level.WARNING, "Invalid jfxrt.jar URL in " + installFolder, e);  //NOI18N
-                }
+                // getArchiveRoot(FileObject) does not throw for local files
+                return ClassPathSupport.createResource(FileUtil.getArchiveRoot(jfxrt));
             }
         }
         return null;
