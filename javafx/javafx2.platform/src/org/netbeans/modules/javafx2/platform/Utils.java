@@ -55,7 +55,7 @@ public final class Utils {
     private static final String[] JFXRT_OPTIONAL_JARS = {"javaws.jar", "deploy.jar", "plugin.jar"}; // NOI18N
     private static final SpecificationVersion JDK9 = new SpecificationVersion("9");   //NOI18N
     private static final String MODULE_PROTOCOL = "nbjrt";   //NOI18N
-    private static final String MODULE_JFX_BASE = "javafx.base";    //NOI18N
+    private static final String MODULE_JFX_PREFIX = "javafx.";    //NOI18N
     private static final String URL_SEPARATOR = "/";    //NOI18N
 
     private static final Logger LOGGER = Logger.getLogger("org.netbeans.modules.javafx2.platform.Utils"); // NOI18N
@@ -131,6 +131,12 @@ public final class Utils {
     
     /**
      * Checks if JavaFx is present as a module in the platform.
+     * <p>This inspects the declared bootstrap libraries of the platform for a
+     * {@code javafx.*} module entry. It is typically cheaper than
+     * {@link org.netbeans.modules.java.j2seplatform.platformdefinition.Util#hasBundledJavaFX},
+     * which scans the raw installation folders and also covers the legacy
+     * {@code jfxrt.jar} layout (JDK 8 and earlier).
+     *
      * @param javaPlatform to check
      * @return returns true if the JavaFx is available as a platform module
      */
@@ -143,7 +149,10 @@ public final class Utils {
             if (!MODULE_PROTOCOL.equals(url.getProtocol())) {
                 continue;
             }
-            if (MODULE_JFX_BASE.equals(getModuleName(url))) {
+            final String moduleName = getModuleName(url);
+            // Accept any bundled javafx.* module, not just javafx.base:
+            // minimal runtime images may ship other JavaFX modules only.
+            if (moduleName != null && moduleName.startsWith(MODULE_JFX_PREFIX)) {
                 return true;
             }
         }

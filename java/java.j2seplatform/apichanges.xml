@@ -82,6 +82,25 @@ is the proper place.
     <!-- ACTUAL CHANGES BEGIN HERE: -->
 
     <changes>
+        <change id="bundled-javafx-detection">
+            <api name="j2selibraries"/>
+            <summary>Add bundled JavaFX detection helpers to platform Util</summary>
+            <version major="1" minor="78"/>
+            <date day="2" month="10" year="2026"/>
+            <author login="yasmramos"/>
+            <compatibility binary="compatible" source="compatible" deprecation="no" deletion="no" addition="yes" />
+            <description>
+                <p>
+                    {@code Util.getJfxRt} is now public and also covers the JDK 8
+                    {@code jre/lib/ext/jfxrt.jar} layout. The new
+                    {@code Util.hasBundledJavaFX} detects JavaFX shipped inside a
+                    platform runtime image, both as {@code javafx.*} modules on
+                    modular JDKs (Zulu FX, Liberica Full, etc.) and as the legacy
+                    {@code jfxrt.jar}.
+                </p>
+            </description>
+            <class package="org.netbeans.modules.java.j2seplatform.platformdefinition" name="Util"/>
+        </change>
         <change id="public-api">
             <api name="j2selibraries"/>
             <summary>Make API / SPI packages public.</summary>
